@@ -322,11 +322,30 @@ def fetch_reviews_ui(
 
             def get_body_preview() -> str:
                 try:
-                    return " ".join(clean_lines(page.inner_text("body")))[:500]
+                    return " ".join(clean_lines(page.inner_text("body")))[:1200]
                 except Exception:
                     return ""
 
+            def has_visible_text(selector: str) -> bool:
+                try:
+                    loc = page.locator(selector)
+                    n = min(loc.count(), 8)
+                    for idx in range(n):
+                        if loc.nth(idx).is_visible():
+                            return True
+                except Exception:
+                    return False
+                return False
+
             def has_network_error() -> bool:
+                try:
+                    net_loc = page.locator("text=/Network error/i")
+                    n = min(net_loc.count(), 5)
+                    for idx in range(n):
+                        if net_loc.nth(idx).is_visible():
+                            return True
+                except Exception:
+                    pass
                 body = get_body_preview().lower()
                 return "network error" in body
 
@@ -356,7 +375,7 @@ def fetch_reviews_ui(
                 deadline = time.time() + login_wait_seconds
                 while time.time() < deadline:
                     for sel in selectors:
-                        if page.locator(sel).count() > 0:
+                        if has_visible_text(sel):
                             ready = True
                             break
                     if ready:
@@ -388,6 +407,7 @@ def fetch_reviews_ui(
                 for sel in selectors:
                     try:
                         selector_counts[sel] = page.locator(sel).count()
+                        selector_counts[f"{sel} (visible)"] = int(has_visible_text(sel))
                     except Exception:
                         selector_counts[sel] = -1
 
