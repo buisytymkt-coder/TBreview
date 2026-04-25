@@ -43,6 +43,7 @@ If login takes time (QR/OTP/captcha), increase `LOGIN_WAIT_SECONDS` in `.env` (d
 - Seen review IDs are stored in `seen_reviews.db` to avoid duplicate alerts.
 - If TikTok UI changes, parser may need selector updates.
 - To re-send everything for testing, stop script and delete `seen_reviews.db`.
+- If you want to skip manual login, set `TIKTOK_COOKIES_FILE` in `.env` to a JSON cookie file path.
 
 ## 5) Quick test Telegram
 
@@ -53,6 +54,28 @@ SEND_STARTUP_MESSAGE=true
 ```
 
 Then run once to check bot delivery.
+
+## 5.1) Cookie login mode (optional)
+
+1. Export cookies from a logged-in browser session to `cookies.json` (array format or `{ \"cookies\": [...] }`).
+2. Put file in project root: `tiktok-review-bot/cookies.json`.
+3. Set in `.env`:
+
+```env
+TIKTOK_COOKIES_FILE=cookies.json
+```
+
+4. Run:
+
+```bash
+python tiktok_review_notifier.py --headless
+```
+
+If your extension exports `cookies.txt` (Netscape format), convert first:
+
+```bash
+python tools/convert_cookies_txt.py /path/to/cookies.txt /Users/buisyty/Thongbao/tiktok-review-bot/cookies.json
+```
 
 ## 6) Dashboard run history
 

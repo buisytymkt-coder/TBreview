@@ -148,6 +148,57 @@ def build_dedupe_id(parts: List[str]) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
+def load_cookies_from_file(cookies_file: Path) -> list[dict]:
+    if not cookies_file.exists():
+        raise FileNotFoundError(f"Cookie file not found: {cookies_file}")
+
+    raw = json.loads(cookies_file.read_text(encoding="utf-8"))
+    if isinstance(raw, dict) and isinstance(raw.get("cookies"), list):
+        items = raw["cookies"]
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        raise ValueError("Cookie file must be a list or object with 'cookies' list.")
+
+    cookies: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+
+        name = str(item.get("name", "")).strip()
+        value = str(item.get("value", "")).strip()
+        if not name:
+            continue
+
+        cookie: dict = {"name": name, "value": value}
+        domain = str(item.get("domain", "")).strip()
+        url = str(item.get("url", "")).strip()
+        if domain:
+            cookie["domain"] = domain
+            cookie["path"] = str(item.get("path", "/")) or "/"
+        elif url:
+            cookie["url"] = url
+        else:
+            continue
+
+        expires = item.get("expires", item.get("expirationDate"))
+        if isinstance(expires, (int, float)) and expires > 0:
+            cookie["expires"] = float(expires)
+        if "httpOnly" in item:
+            cookie["httpOnly"] = bool(item.get("httpOnly"))
+        if "secure" in item:
+            cookie["secure"] = bool(item.get("secure"))
+        same_site = str(item.get("sameSite", "")).lower()
+        if same_site in {"lax", "strict", "none"}:
+            cookie["sameSite"] = same_site.capitalize()
+
+        cookies.append(cookie)
+
+    if not cookies:
+        raise ValueError("No valid cookies found in cookie file.")
+    return cookies
+
+
 def parse_row_text(row_text: str, product_block_text: str, stars_from_dom: int, username_from_dom: str) -> Review:
     row_lines = clean_lines(row_text)
     row_all_text = " ".join(row_lines)
@@ -230,7 +281,12 @@ def parse_row_text(row_text: str, product_block_text: str, stars_from_dom: int, 
 
 
 def fetch_reviews_ui(
-    url: str, user_data_dir: Path, max_rows: int, headless: bool, login_wait_seconds: int
+    url: str,
+    user_data_dir: Path,
+    max_rows: int,
+    headless: bool,
+    login_wait_seconds: int,
+    cookies_file: Path | None = None,
 ) -> List[Review]:
     reviews: List[Review] = []
 
@@ -243,6 +299,9 @@ def fetch_reviews_ui(
 
         try:
             page = context.pages[0] if context.pages else context.new_page()
+            if cookies_file:
+                cookies = load_cookies_from_file(cookies_file)
+                context.add_cookies(cookies)
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
             try:
@@ -352,6 +411,7 @@ def run_once(
     max_rows: int,
     headless: bool,
     login_wait_seconds: int,
+    cookies_file: Path | None = None,
 ) -> dict:
     conn = ensure_db(db_path)
     try:
@@ -361,6 +421,7 @@ def run_once(
             max_rows=max_rows,
             headless=headless,
             login_wait_seconds=login_wait_seconds,
+            cookies_file=cookies_file,
         )
         new_count = 0
 
@@ -410,6 +471,12 @@ def main() -> int:
     db_path = app_dir / "seen_reviews.db"
     user_data_dir = app_dir / "browser_profile"
     user_data_dir.mkdir(parents=True, exist_ok=True)
+    cookies_file_env = get_env("TIKTOK_COOKIES_FILE", required=False, default="")
+    cookies_file = None
+    if cookies_file_env:
+        cookies_file = Path(cookies_file_env)
+        if not cookies_file.is_absolute():
+            cookies_file = app_dir / cookies_file
 
     if send_startup:
         try:
@@ -428,6 +495,7 @@ def main() -> int:
                 max_rows=max_rows,
                 headless=args.headless,
                 login_wait_seconds=login_wait_seconds,
+                cookies_file=cookies_file,
             )
             print(json.dumps(result, ensure_ascii=False))
             return 0
@@ -457,6 +525,7 @@ def main() -> int:
                 max_rows=max_rows,
                 headless=args.headless,
                 login_wait_seconds=login_wait_seconds,
+                cookies_file=cookies_file,
             )
             last_error_signature = ""
             print(f"[{datetime.now().isoformat(timespec='seconds')}] fetched={result['fetched']} new={result['new']}")

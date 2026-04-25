@@ -8,3 +8,4 @@ bot.log
 bot.pid
 dist/
 .DS_Store
+cookies.json
