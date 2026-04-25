@@ -319,15 +319,38 @@ def fetch_reviews_ui(
             except PlaywrightTimeoutError:
                 pass
 
-            try:
-                page.wait_for_selector(
-                    "text=/Order ID:|Product ID:|Review details/i",
-                    timeout=login_wait_seconds * 1000,
-                )
-            except PlaywrightTimeoutError as exc:
+            # On some layouts, review rows are below the fold. Probe + auto-scroll
+            # before concluding session/login failure.
+            selectors = [
+                "text=Order ID:",
+                "text=Review details",
+                "text=Product ID:",
+            ]
+            ready = False
+            deadline = time.time() + login_wait_seconds
+            while time.time() < deadline:
+                for sel in selectors:
+                    if page.locator(sel).count() > 0:
+                        ready = True
+                        break
+                if ready:
+                    break
+
+                # Try to move viewport to the review list region.
+                try:
+                    if page.locator("text=Respond to reviews").count() > 0:
+                        page.locator("text=Respond to reviews").first.scroll_into_view_if_needed(timeout=1500)
+                except Exception:
+                    pass
+
+                page.evaluate("window.scrollBy(0, Math.max(800, window.innerHeight));")
+                page.wait_for_timeout(900)
+
+            if not ready:
                 current_url = page.url
                 title = ""
                 body_preview = ""
+                selector_counts = {}
                 try:
                     title = page.title()
                 except Exception:
@@ -336,11 +359,16 @@ def fetch_reviews_ui(
                     body_preview = " ".join(clean_lines(page.inner_text("body")))[:500]
                 except Exception:
                     body_preview = ""
+                for sel in selectors:
+                    try:
+                        selector_counts[sel] = page.locator(sel).count()
+                    except Exception:
+                        selector_counts[sel] = -1
 
                 raise RuntimeError(
                     "Timeout waiting review table. "
-                    f"url={current_url} title={title} body={body_preview}"
-                ) from exc
+                    f"url={current_url} title={title} selectors={selector_counts} body={body_preview}"
+                )
 
             cards = page.locator(
                 "xpath=//*[contains(normalize-space(.), 'Order ID:') and contains(normalize-space(.), 'Product ID:')]"
