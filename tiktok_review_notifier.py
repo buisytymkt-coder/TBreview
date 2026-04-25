@@ -319,10 +319,31 @@ def fetch_reviews_ui(
             except PlaywrightTimeoutError:
                 pass
 
-            page.wait_for_selector("text=Order ID:", timeout=login_wait_seconds * 1000)
+            try:
+                page.wait_for_selector(
+                    "text=/Order ID:|Product ID:|Review details/i",
+                    timeout=login_wait_seconds * 1000,
+                )
+            except PlaywrightTimeoutError as exc:
+                current_url = page.url
+                title = ""
+                body_preview = ""
+                try:
+                    title = page.title()
+                except Exception:
+                    title = "N/A"
+                try:
+                    body_preview = " ".join(clean_lines(page.inner_text("body")))[:500]
+                except Exception:
+                    body_preview = ""
+
+                raise RuntimeError(
+                    "Timeout waiting review table. "
+                    f"url={current_url} title={title} body={body_preview}"
+                ) from exc
 
             cards = page.locator(
-                "xpath=//*[starts-with(normalize-space(.), 'Order ID:') and contains(normalize-space(.), 'Product ID:')]"
+                "xpath=//*[contains(normalize-space(.), 'Order ID:') and contains(normalize-space(.), 'Product ID:')]"
             )
             seen_order_ids = set()
 
