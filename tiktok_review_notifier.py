@@ -290,6 +290,7 @@ def fetch_reviews_ui(
     login_wait_seconds: int,
     network_error_retry_count: int,
     network_error_retry_delay_seconds: int,
+    proxy: dict | None = None,
     cookies_file: Path | None = None,
 ) -> List[Review]:
     reviews: List[Review] = []
@@ -307,6 +308,7 @@ def fetch_reviews_ui(
             headless=headless,
             viewport={"width": 1366, "height": 900},
             args=chromium_args,
+            proxy=proxy,
         )
 
         try:
@@ -526,6 +528,7 @@ def run_once(
     login_wait_seconds: int,
     network_error_retry_count: int,
     network_error_retry_delay_seconds: int,
+    proxy: dict | None = None,
     cookies_file: Path | None = None,
 ) -> dict:
     conn = ensure_db(db_path)
@@ -538,6 +541,7 @@ def run_once(
             login_wait_seconds=login_wait_seconds,
             network_error_retry_count=network_error_retry_count,
             network_error_retry_delay_seconds=network_error_retry_delay_seconds,
+            proxy=proxy,
             cookies_file=cookies_file,
         )
         new_count = 0
@@ -585,6 +589,9 @@ def main() -> int:
         network_error_retry_delay_seconds = int(
             get_env("NETWORK_ERROR_RETRY_DELAY_SECONDS", required=False, default="5")
         )
+        proxy_server = get_env("TIKTOK_PROXY_SERVER", required=False, default="")
+        proxy_username = get_env("TIKTOK_PROXY_USERNAME", required=False, default="")
+        proxy_password = get_env("TIKTOK_PROXY_PASSWORD", required=False, default="")
         send_startup = as_bool(get_env("SEND_STARTUP_MESSAGE", required=False, default="false"))
     except Exception as exc:
         print(f"Config error: {exc}", file=sys.stderr)
@@ -600,6 +607,13 @@ def main() -> int:
         cookies_file = Path(cookies_file_env)
         if not cookies_file.is_absolute():
             cookies_file = app_dir / cookies_file
+    proxy = None
+    if proxy_server:
+        proxy = {"server": proxy_server}
+        if proxy_username:
+            proxy["username"] = proxy_username
+        if proxy_password:
+            proxy["password"] = proxy_password
 
     if send_startup:
         try:
@@ -620,6 +634,7 @@ def main() -> int:
                 login_wait_seconds=login_wait_seconds,
                 network_error_retry_count=network_error_retry_count,
                 network_error_retry_delay_seconds=network_error_retry_delay_seconds,
+                proxy=proxy,
                 cookies_file=cookies_file,
             )
             print(json.dumps(result, ensure_ascii=False))
@@ -652,6 +667,7 @@ def main() -> int:
                 login_wait_seconds=login_wait_seconds,
                 network_error_retry_count=network_error_retry_count,
                 network_error_retry_delay_seconds=network_error_retry_delay_seconds,
+                proxy=proxy,
                 cookies_file=cookies_file,
             )
             last_error_signature = ""
