@@ -288,6 +288,8 @@ def fetch_reviews_ui(
     max_rows: int,
     headless: bool,
     login_wait_seconds: int,
+    network_error_retry_count: int,
+    network_error_retry_delay_seconds: int,
     cookies_file: Path | None = None,
 ) -> List[Review]:
     reviews: List[Review] = []
@@ -312,63 +314,95 @@ def fetch_reviews_ui(
             if cookies_file:
                 cookies = load_cookies_from_file(cookies_file)
                 context.add_cookies(cookies)
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
-
-            try:
-                page.wait_for_selector("text=Product Ratings", timeout=40000)
-            except PlaywrightTimeoutError:
-                pass
-
-            # On some layouts, review rows are below the fold. Probe + auto-scroll
-            # before concluding session/login failure.
             selectors = [
                 "text=Order ID:",
                 "text=Review details",
                 "text=Product ID:",
             ]
-            ready = False
-            deadline = time.time() + login_wait_seconds
-            while time.time() < deadline:
-                for sel in selectors:
-                    if page.locator(sel).count() > 0:
-                        ready = True
+
+            def get_body_preview() -> str:
+                try:
+                    return " ".join(clean_lines(page.inner_text("body")))[:500]
+                except Exception:
+                    return ""
+
+            def has_network_error() -> bool:
+                body = get_body_preview().lower()
+                return "network error" in body
+
+            last_diag = "Unknown failure while opening review table."
+            for attempt in range(network_error_retry_count + 1):
+                if attempt == 0:
+                    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                else:
+                    page.reload(wait_until="domcontentloaded", timeout=60000)
+
+                try:
+                    page.wait_for_selector("text=Product Ratings", timeout=40000)
+                except PlaywrightTimeoutError:
+                    pass
+
+                if has_network_error():
+                    if attempt < network_error_retry_count:
+                        page.wait_for_timeout(network_error_retry_delay_seconds * 1000)
+                        continue
+                    raise RuntimeError(
+                        f"TikTok returned Network error after {attempt + 1} attempts."
+                    )
+
+                # On some layouts, review rows are below the fold. Probe + auto-scroll
+                # before concluding session/login failure.
+                ready = False
+                deadline = time.time() + login_wait_seconds
+                while time.time() < deadline:
+                    for sel in selectors:
+                        if page.locator(sel).count() > 0:
+                            ready = True
+                            break
+                    if ready:
                         break
+
+                    if has_network_error():
+                        break
+
+                    try:
+                        if page.locator("text=Respond to reviews").count() > 0:
+                            page.locator("text=Respond to reviews").first.scroll_into_view_if_needed(timeout=1500)
+                    except Exception:
+                        pass
+
+                    page.evaluate("window.scrollBy(0, Math.max(800, window.innerHeight));")
+                    page.wait_for_timeout(900)
+
                 if ready:
                     break
 
-                # Try to move viewport to the review list region.
-                try:
-                    if page.locator("text=Respond to reviews").count() > 0:
-                        page.locator("text=Respond to reviews").first.scroll_into_view_if_needed(timeout=1500)
-                except Exception:
-                    pass
-
-                page.evaluate("window.scrollBy(0, Math.max(800, window.innerHeight));")
-                page.wait_for_timeout(900)
-
-            if not ready:
                 current_url = page.url
                 title = ""
-                body_preview = ""
                 selector_counts = {}
                 try:
                     title = page.title()
                 except Exception:
                     title = "N/A"
-                try:
-                    body_preview = " ".join(clean_lines(page.inner_text("body")))[:500]
-                except Exception:
-                    body_preview = ""
+                body_preview = get_body_preview()
                 for sel in selectors:
                     try:
                         selector_counts[sel] = page.locator(sel).count()
                     except Exception:
                         selector_counts[sel] = -1
 
-                raise RuntimeError(
+                last_diag = (
                     "Timeout waiting review table. "
                     f"url={current_url} title={title} selectors={selector_counts} body={body_preview}"
                 )
+
+                if has_network_error() and attempt < network_error_retry_count:
+                    page.wait_for_timeout(network_error_retry_delay_seconds * 1000)
+                    continue
+
+                raise RuntimeError(last_diag)
+            else:
+                raise RuntimeError(last_diag)
 
             cards = page.locator(
                 "xpath=//*[contains(normalize-space(.), 'Order ID:') and contains(normalize-space(.), 'Product ID:')]"
@@ -470,6 +504,8 @@ def run_once(
     max_rows: int,
     headless: bool,
     login_wait_seconds: int,
+    network_error_retry_count: int,
+    network_error_retry_delay_seconds: int,
     cookies_file: Path | None = None,
 ) -> dict:
     conn = ensure_db(db_path)
@@ -480,6 +516,8 @@ def run_once(
             max_rows=max_rows,
             headless=headless,
             login_wait_seconds=login_wait_seconds,
+            network_error_retry_count=network_error_retry_count,
+            network_error_retry_delay_seconds=network_error_retry_delay_seconds,
             cookies_file=cookies_file,
         )
         new_count = 0
@@ -521,6 +559,12 @@ def main() -> int:
         poll_seconds = int(get_env("POLL_SECONDS", required=False, default="300"))
         max_rows = int(get_env("MAX_ROWS", required=False, default="30"))
         login_wait_seconds = int(get_env("LOGIN_WAIT_SECONDS", required=False, default="300"))
+        network_error_retry_count = int(
+            get_env("NETWORK_ERROR_RETRY_COUNT", required=False, default="4")
+        )
+        network_error_retry_delay_seconds = int(
+            get_env("NETWORK_ERROR_RETRY_DELAY_SECONDS", required=False, default="5")
+        )
         send_startup = as_bool(get_env("SEND_STARTUP_MESSAGE", required=False, default="false"))
     except Exception as exc:
         print(f"Config error: {exc}", file=sys.stderr)
@@ -554,6 +598,8 @@ def main() -> int:
                 max_rows=max_rows,
                 headless=args.headless,
                 login_wait_seconds=login_wait_seconds,
+                network_error_retry_count=network_error_retry_count,
+                network_error_retry_delay_seconds=network_error_retry_delay_seconds,
                 cookies_file=cookies_file,
             )
             print(json.dumps(result, ensure_ascii=False))
@@ -584,6 +630,8 @@ def main() -> int:
                 max_rows=max_rows,
                 headless=args.headless,
                 login_wait_seconds=login_wait_seconds,
+                network_error_retry_count=network_error_retry_count,
+                network_error_retry_delay_seconds=network_error_retry_delay_seconds,
                 cookies_file=cookies_file,
             )
             last_error_signature = ""
