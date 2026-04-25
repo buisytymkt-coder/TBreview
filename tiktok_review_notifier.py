@@ -291,12 +291,20 @@ def fetch_reviews_ui(
     cookies_file: Path | None = None,
 ) -> List[Review]:
     reviews: List[Review] = []
+    chromium_args = [
+        "--disable-gpu",
+        "--disable-software-rasterizer",
+        "--no-zygote",
+        "--disable-features=VizDisplayCompositor,IsolateOrigins,site-per-process",
+        "--renderer-process-limit=1",
+    ]
 
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
             user_data_dir=str(user_data_dir),
             headless=headless,
-            viewport={"width": 1600, "height": 1200},
+            viewport={"width": 1366, "height": 900},
+            args=chromium_args,
         )
 
         try:
